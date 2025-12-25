@@ -1,14 +1,13 @@
 import os
-import requests
-import google.generativeai as genai
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
-
+from google import genai  # NEW: Future-proof SDK
+import requests
+# 1. Initialize Flask (Fixes "app" is not defined)
 app = Flask(__name__)
 
-# Configure Gemini (Get key for free at aistudio.google.com)
-genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
-model = genai.GenerativeModel('gemini-1.5-flash')
+# 2. Initialize Gemini Client (Fixes "model" is not defined)
+client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
 def get_mandi_price(item):
     """Fetches 100% accurate price from Govt Data API"""
@@ -19,33 +18,30 @@ def get_mandi_price(item):
         record = data['records'][0]
         return f"₹{record['modal_price']} in {record['market']} ({record['district']})"
     except:
-        return "Price currently unavailable for this item."
+        return "Price currently unavailable."
 
 @app.route("/", methods=['POST'])
 def whatsapp_webhook():
-    # 1. Get the message or voice link from WhatsApp
     incoming_msg = request.values.get('Body', '').lower()
-    media_url = request.values.get('MediaUrl0') # Link to the voice note
+    media_url = request.values.get('MediaUrl0')
 
-    # 2. Accuracy Logic: Use Gemini to understand the intent
-    # If it's a voice note, Gemini 1.5 Flash can actually 'hear' the link directly!
-    prompt = f"The user said: '{incoming_msg}'. Extract the agricultural commodity. Answer with ONE WORD only."
+    # 3. Use the new 'client' logic (Fixes errors)
+    prompt = f"Identify the agricultural crop in this text: '{incoming_msg}'. One word only."
     
-    if media_url:
-        # Instruction for Gemini to handle the audio link
-        prompt = f"Listen to this audio link: {media_url}. What crop is the user asking about? Answer with ONE word."
+    # NEW: 2025 Gemini Logic
+    response = client.models.generate_content(
+        model="gemini-1.5-flash", 
+        contents=prompt
+    )
+    ai_analysis = response.text.strip()
 
-    ai_analysis = model.generate_content(prompt).text.strip()
-
-    # 3. Fetch Real Data
     market_info = get_mandi_price(ai_analysis)
 
-    # 4. Respond to user
+    # 4. Respond via Twilio (Fixes "MessagingResponse" is not defined)
     resp = MessagingResponse()
-    reply_text = f"✨ *Bharat Voice OS Info*\n\n✅ Item: {ai_analysis}\n💰 Price: {market_info}\n\n_100% Verified Govt Data_"
-    resp.message(reply_text)
-    
+    resp.message(f"✅ *Bharat Voice OS*\nItem: {ai_analysis}\nPrice: {market_info}")
     return str(resp)
 
-# Required for Vercel
-app.debug = True
+# Required for Vercel routing
+if __name__ == "__main__":
+    app.run()
